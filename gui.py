@@ -9,7 +9,7 @@ try:
 except:
     from dotenv import main
 
-path="//192.168.1.125/gbts/Create_PDF_Report/"  
+path=f"{str(os.getcwd())}\\"  
 #path= os.path.dirname(__file__)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -60,4 +60,5 @@ output_text = tk.Text(root, height=10, width=50)
 output_text.grid(row=3, column=0, columnspan=2, pady=10)
 
 root.mainloop()
+
 
