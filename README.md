@@ -11,7 +11,7 @@ A Python script to automatically generate the **GBTS Daily Report** in PDF by do
 
 - Download logbooks and data from SharePoint Online using Microsoft Graph API.
 - Skip report generation on holidays and weekends automatically.
-- Analyze today’s and tomorrow’s simulator activities (SBT, CBT, RTMS, MPDS).
+- Analyze today’s and tomorrow’s simulator activities.
 - Generate a well-formatted PDF including:
   - Simulator status
   - Completed and scheduled training
