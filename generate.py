@@ -152,24 +152,6 @@ class data():
             print(loadErr)
             return pd.array()
     
-    def download_from_sharepoint_old(self, site_url, file_url_daily, new_filename, username, password):
-        from office365.sharepoint.client_context import ClientContext
-        from office365.runtime.auth.user_credential import UserCredential
-
-        # Connessione a SharePoint
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-
-        try:
-            # Scarica il file e lo salva in locale
-            with open(new_filename, "wb") as local_file:
-                file = ctx.web.get_file_by_server_relative_url(file_url_daily)
-                file.download(local_file).execute_query()
-
-            print(f"✅ File scaricato correttamente: {new_filename}")
-
-        except Exception as e:
-            print(f"❌ Errore durante il download: {e}") 
-
 
 
     def get_access_token(self,clientID, clientSecret, tenantID):
@@ -200,39 +182,6 @@ class data():
         r.raise_for_status()
         return r.json()["id"]
 
-    def download_from_sharepoint__(self,site_url, file_path, new_filename, clientID, clientSecret, tenantID):
-        """
-        Scarica un file da SharePoint Online via Microsoft Graph API
-        """
-        try:
-            # 1️⃣ Ottieni token
-            access_token = self.get_access_token(clientID, clientSecret, tenantID)
-            print("✅ Token ottenuto con successo")
-
-            # 2️⃣ Recupera site_id
-            site_id = self.get_site_id(site_url, access_token)
-            print(f"✅ Site ID ottenuto: {site_id}")
-
-            # 3️⃣ Scarica il file
-            graph_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{file_path}:/content"
-            headers = {"Authorization": f"Bearer {access_token}"}
-            site_url__old = "https://graph.microsoft.com/v1.0/sites/lcajt.sharepoint.com:/sites/GBTS"
-            
-            r = requests.get(graph_url, headers=headers, stream=True)
-            print(r.status_code)
-            print(r.json())
-            
-            r.raise_for_status()
-
-            with open(new_filename, "wb") as f:
-                f.write(r.content)
-            print(r.content[:200])
-            print(f"✅ File scaricato correttamente: {new_filename}")
-
-        except requests.HTTPError as e:
-            print(f"❌ HTTP Error: {e.response.status_code} {e.response.text}")
-        except Exception as e:
-            print(f"❌ Errore: {e}")
 
     def download_from_sharepoint(self, site_url, file_path, new_filename, clientID, clientSecret, tenantID):
         """
@@ -257,7 +206,7 @@ class data():
             # 4️⃣ Trova il drive "Documents"
             documents_drive = next((d for d in drives if d["name"] == "Documents"), None)
             if not documents_drive:
-                raise Exception("Drive 'Documents' not found in the site.")
+                raise Exception(f"Drive not found in the site.")
 
             drive_id = documents_drive["id"]
             #print(f"Drive ID trovato: {drive_id}")
@@ -300,62 +249,77 @@ class data():
         total_hours=total_time.days*24 + int(total_time.seconds/3600)
         total_minutes = int((total_time.seconds%3600)/60)
         return "{:02d}:{:02d}".format(total_hours,total_minutes)
+    
 
-    def read_today_data(self,lgbk,today):
+    def read_today_data(self, lgbk, today):
+        from datetime import timedelta
+        import pandas as pd, numpy as np
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import Paragraph
+
+        data = lgbk.iloc[12:].copy()
+        data.iloc[:, 1] = pd.to_datetime(data.iloc[:, 1],format="%Y-%m-%d")    
+        data = data[data.iloc[:, 1] == pd.to_datetime(today,format="%Y-%m-%d")]
+        if data.empty:
+            return [], "00:00", "00:00", 0, 0
+
+        data.iloc[:, 4] = data.iloc[:, 4].fillna("").astype(str)
+        data.iloc[:, 3] = data.iloc[:, 3].fillna("").astype(str)
+        data["ip_notes"] = data.iloc[:, 24].fillna("").astype(str)
+        data["internal_notes"] = data.iloc[:, 63].fillna("").astype(str)
+        data["sim"] = np.where(
+            data.iloc[:, 15].astype(str).str.contains("LVC", na=False),
+            data.iloc[:, 10].astype(str) + " LVC",
+            data.iloc[:, 10].astype(str)
+        )
+
+        outcome_colors = {'RSLD':'gray','CANC':'red','SMC':'red','DNCO':'orange','SDNC':'orange','DCO':'white','SDC':'white','ERR':'white'}
+        data["outcome_color"] = data.iloc[:, 22].map(outcome_colors).fillna("white")
+
+        styles = getSampleStyleSheet()
+        custom_style = ParagraphStyle('CustomStyle', parent=styles['Normal'], fontSize=5)
+        data["formatted_text"] = data.apply(
+            lambda r: Paragraph(
+                (
+                    ("" if r["ip_notes"] == "" else "<b>IP Notes:</b> " + self.insert_newline_every_n_spaces(r["ip_notes"])) +
+                    ("" if r["internal_notes"] == "" else "<br/><b>Tech Notes:</b> " + self.insert_newline_every_n_spaces(r["internal_notes"]))
+                ),
+                custom_style
+            ),
+            axis=1
+        )
+
+        today_sessions = [
+            [
+                r[69], r[15], f"{r[4]}@\n{r[3]}".replace("nan@nan", ""),
+                str(r[6]).replace("nan",""), r.sim, r[11],
+                str(r[21]).replace("nan",""), r[22], str(r[23]).replace("nan","N/A"),
+                r.formatted_text, r[18], r.outcome_color
+            ]
+            for r in data.itertuples(index=False)
+        ]
+
+        def sum_duration(series):
+            td = timedelta()
+            for v in series.dropna():
+                td += timedelta(hours=v.hour, minutes=v.minute, seconds=v.second)
+            return td
+
+        pld_duration = self.hour_minute_converter(sum_duration(data.iloc[:, 18]))
+        act_duration = self.hour_minute_converter(sum_duration(data.iloc[:, 21]))
+        scheduled_sessions = len(data)
+        executed_sessions = data.iloc[:, 22].isin(["DCO", "SDC"]).sum()
+
+        return today_sessions, pld_duration, act_duration, scheduled_sessions, executed_sessions
         
-        today_sessions=[]
-        scheduled_sessions=0
-        executed_sessions=0
-        outcome_colors={'RSLD':'gray','CANC':'red','SMC':'red','DNCO':'orange','SDNC':'orange','DCO':'white','SDC':'white','ERR':'white'}
-        pld_duration=act_duration=timedelta(hours=0,minutes=0,seconds=0)
-        for i,row in lgbk[12:].iterrows():
-            
-            if len(str(row.iloc[1].date()).split('-'))!=3:
-                break
-            if str(row.iloc[1].date())==today:
-                try:
-                    
-                    sim=str(row.iloc[10])
-                    if "LVC" in str(row.iloc[15]):
-                        sim=str(row.iloc[10]) + " LVC"
-                    
-                    ip_notes= "<b>IP Notes:</b> " + self.insert_newline_every_n_spaces(str(row.iloc[24]))
-                    internal_notes="<br/><b>Tech Notes:</b> " + self.insert_newline_every_n_spaces(str(row.iloc[63]))
-                    if str(row.iloc[24]) == "nan":
-                        ip_notes=""
-                    if str(row.iloc[63]) == "nan":
-                        internal_notes=""
-                    styles = getSampleStyleSheet()
-                    custom_style = ParagraphStyle(
-                                                    'CustomStyle',
-                                                    parent=styles['Normal'],  
-                                                    fontSize=5,              
-                                                    )
-                   
-                    formatted_text = Paragraph(ip_notes + internal_notes, custom_style)
-                    
-                    tmp=[row.iloc[69],row.iloc[15],(str(row.iloc[4])+"@\n"+str(row.iloc[3])).replace("nan@nan",""),
-                         str(row.iloc[6]).replace("nan",""),sim,row.iloc[11],str(row.iloc[21]).replace("nan",""),row.iloc[22],str(row.iloc[23]).replace("nan","N/A"),\
-                         formatted_text,\
-                         row.iloc[18],outcome_colors[row.iloc[22]]]
-                    scheduled_sessions+=1
-                    if str(row.iloc[22]) == "DCO" or str(row.iloc[22]) == "SDC":
-                        executed_sessions+=1
-                    today_sessions.append(tmp)
-                    try:
-                        pld_duration=pld_duration+timedelta(hours=row.iloc[18].hour,minutes=row.iloc[18].minute,seconds=row.iloc[18].second)
-                        act_duration=act_duration+timedelta(hours=row.iloc[21].hour,minutes=row.iloc[21].minute, seconds=row.iloc[21].second)
-                    except: pass #case of duration not available
-                except Exception as readingErr: 
-                    print(readingErr)
-                    return 
-        return today_sessions,self.hour_minute_converter(pld_duration),self.hour_minute_converter(act_duration),scheduled_sessions,executed_sessions        
-
-
+    
     def read_tomorrow_data(self,lgbk,tomorrow):
         tomorrow_sessions=[]
         pld_duration=timedelta(hours=0,minutes=0,seconds=0)
-        for i,row in lgbk[10:].iterrows():
+        data = lgbk.iloc[12:].copy()
+        data.iloc[:, 1] = pd.to_datetime(data.iloc[:, 1],format="%Y-%m-%d")    
+        data = data[data.iloc[:, 1] == pd.to_datetime(tomorrow,format="%Y-%m-%d")]
+        for i,row in data[:].iterrows():
             if str(row.iloc[1].date())==tomorrow:
                 sim=str(row.iloc[10])
                 if "LVC" in str(row.iloc[15]):
@@ -366,8 +330,8 @@ class data():
                     pld_duration=pld_duration+timedelta(hours=row.iloc[18].hour,minutes=row.iloc[18].minute,seconds=row.iloc[18].second)
                 except: pass
         return tomorrow_sessions, self.hour_minute_converter(pld_duration)
-    
-    def read_rtms_data(self,rtms,today):
+
+    def read_rtms_data_old(self,rtms,today):
         rtms_session=[]
         for i,row in rtms[140:].iterrows():
             try:
@@ -383,6 +347,27 @@ class data():
             except: pass
         return rtms_session
     
+    def read_rtms_data(self,rtms,today):
+        rtms_session=[]
+        data = rtms.iloc[140:].copy()
+        data.iloc[:, 1] = pd.to_datetime(data.iloc[:, 1],format="%Y-%m-%d")    
+        data = data[data.iloc[:, 1] == pd.to_datetime(today,format="%Y-%m-%d")]
+        if data.empty:
+            return []
+        rtms_session = [
+            [
+                r[0], 
+                r[3],
+                str(r[7]).replace("nan",""), 
+                str(r[8]).replace("nan",""), 
+                r[10],
+                self.insert_newline_every_n_spaces(str(r[12]).replace("nan","")),
+                self.insert_newline_every_n_spaces(str(r[14]).replace("nan","")),
+                self.insert_newline_every_n_spaces(str(r[15]).replace("nan",""))
+            ]
+            for r in data.itertuples(index=False)
+        ]
+        return rtms_session
 
     def read_sim_status(self,lgbk):
         sim_status=[]
@@ -397,28 +382,9 @@ class data():
                                status_color[row.iloc[1]]]) 
         return sim_status
     
-    def read_cbt_sbt_status(self,cbt_sbt):
-        sbt=[]
-        cbt=[]
-        status_color={'OK':'green','NOK':'red','POK':'orange'}
-        check_sbt=check_cbt=False
-        for i,row in cbt_sbt[5:].iterrows():
-            if check_sbt and check_cbt:
-                sbt.append(["SBTs Availability",str(cbt_sbt.iloc[2,8])+" OK","","","","","green"])
-                cbt.append(["CBTs Availability",str(cbt_sbt.iloc[2,18])+" OK","","","","","green"])
-                return sbt,cbt
-            if not check_sbt and row.iloc[7] != "Totale complessivo":
-                sbt.append([row.iloc[7],self.insert_newline_every_n_spaces(row.iloc[8]),
-                            self.insert_newline_every_n_spaces(row.iloc[9]),
-                            str(row.iloc[10]),"","",status_color[str(row.iloc[8])]])
-            else: check_sbt=True
-            if not check_cbt and row.iloc[17] != "Totale complessivo":
-                cbt.append([row.iloc[17],self.insert_newline_every_n_spaces(row.iloc[18]),
-                            self.insert_newline_every_n_spaces(row.iloc[19]),
-                           str(row.iloc[20]),"","",status_color[str(row.iloc[18])]])
-            else: check_cbt=True
+    
 
-    def  read_cbt_sbt_status_new(self,cbt_sbt, today):
+    def  read_cbt_sbt_status_old(self,cbt_sbt, today):
         sbt=[]
         cbt=[]
         sbt_status=18
@@ -469,6 +435,59 @@ class data():
         sbt.append(["SBTs Availability",str(sbt_status)+"/18 OK","","","","","green"])
         cbt.append(["CBTs Availability",str(cbt_status)+"/32 OK","","","","","green"])
         return sbt,cbt  
+
+    def read_cbt_sbt_status(self, cbt_sbt, today):
+        sbt_status_total = 18
+        cbt_status_total = 32
+        status_color = {'OK': 'green', 'NOK': 'red', 'POK': 'orange'}
+        
+        cbt_sbt = cbt_sbt.iloc[-1:].copy()
+        # --- Assicurati che i tipi siano stringhe ---
+        cbt_sbt = cbt_sbt.astype(str)
+        
+        # --- Filtra solo righe con SBT o CBT ---
+        sbt_rows = cbt_sbt[cbt_sbt.iloc[:, 6].str.contains("SBT", na=False)]
+        cbt_rows = cbt_sbt[cbt_sbt.iloc[:, 6].str.contains("CBT", na=False)]
+        
+        sbt = []
+        cbt = []
+        sbt_status = sbt_status_total
+        cbt_status = cbt_status_total
+
+        # --- Gestione SBT ---
+        for _, row in sbt_rows.iterrows():
+            room = row.iloc[6]
+            status = row.iloc[3]
+            color = status_color.get(status, 'gray')
+
+            if status != "OK":
+                if room == "SBT Room1":
+                    sbt_status -= 8
+                elif room == "SBT Room2":
+                    sbt_status -= 10
+                else:
+                    sbt_status -= 1
+                sbt.append([room, status, row.iloc[8], row.iloc[2], "", "", color])
+
+        # --- Gestione CBT ---
+        for _, row in cbt_rows.iterrows():
+            room = row.iloc[6]
+            status = row.iloc[3]
+            color = status_color.get(status, 'gray')
+
+            if status != "OK":
+                if room in ("CBT Room1", "CBT Room2"):
+                    cbt_status -= 16
+                else:
+                    cbt_status -= 1
+                cbt.append([room, status, row.iloc[9], row.iloc[2], "", "", color])
+
+        # --- Riepilogo finale ---
+        sbt.append(["SBTs Availability", f"{sbt_status}/{sbt_status_total} OK", "", "", "", "", "green"])
+        cbt.append(["CBTs Availability", f"{cbt_status}/{cbt_status_total} OK", "", "", "", "", "green"])
+
+        return sbt, cbt
+
 
     def read_mpds_status(self,mpds_items):
         mpds=[]
