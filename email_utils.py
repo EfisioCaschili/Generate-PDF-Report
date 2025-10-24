@@ -12,8 +12,7 @@ import os
 from pathlib import Path 
 from dotenv import dotenv_values
 
-dirname=os.path.dirname(__file__)
-dirname="//192.168.1.125/gbts/Create_PDF_Report/" 
+dirname=f"{str(os.getcwd())}\\" 
 
 env=dotenv_values(dirname+'env.env')
 
@@ -104,4 +103,5 @@ def sender():
     print('Email sent...')
 
 if __name__ == '__main__':
+
     sender()
