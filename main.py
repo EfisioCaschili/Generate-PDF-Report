@@ -21,7 +21,7 @@ except:
 
 
 
-path="//192.168.1.125/gbts/Create_PDF_Report/"  
+path=f"{str(os.getcwd())}\\"
 
 #path= os.path.dirname(__file__)
 try:
@@ -255,3 +255,4 @@ def create(today="",tomorrow=""):
 if __name__=='__main__':
     create() 
     
+
